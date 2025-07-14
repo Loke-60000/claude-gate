@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/99designs/keyring"
+	"github.com/ml0-1337/claude-gate/internal/ui/utils"
 )
 
 // StorageType represents the type of storage backend
@@ -129,7 +131,8 @@ func (f *StorageFactory) CreateWithMigration() (StorageBackend, error) {
 	}
 	
 	// Check if we need to migrate from file storage
-	if f.storageType != StorageTypeFile {
+	// Only migrate if we're not already using file storage and the destination is different
+	if f.storageType != StorageTypeFile && !strings.HasPrefix(storage.Name(), "file:") {
 		fileStorage := NewFileStorage(f.filePath)
 		
 		// Check if file storage has data
@@ -150,6 +153,11 @@ func (f *StorageFactory) CreateWithMigration() (StorageBackend, error) {
 
 // isKeyringAvailable checks if keyring functionality is available on this system
 func isKeyringAvailable() bool {
+	// If no TTY available, don't try keyring as it might need interactive prompts
+	if !utils.IsInteractive() {
+		return false
+	}
+
 	switch runtime.GOOS {
 	case "darwin":
 		// macOS always has Keychain

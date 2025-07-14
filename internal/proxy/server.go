@@ -58,7 +58,7 @@ func (h *RootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateMux creates the HTTP mux with all routes
-func CreateMux(proxyHandler http.Handler, healthHandler http.Handler) http.Handler {
+func CreateMux(proxyHandler http.Handler, healthHandler http.Handler, tokenProvider TokenProvider, upstreamURL string) http.Handler {
 	mux := http.NewServeMux()
 	
 	// Health check endpoint
@@ -68,7 +68,7 @@ func CreateMux(proxyHandler http.Handler, healthHandler http.Handler) http.Handl
 	mux.Handle("/", &RootHandler{})
 	
 	// Models endpoint for OpenAI compatibility
-	mux.Handle("/v1/models", NewModelsHandler())
+	mux.Handle("/v1/models", NewModelsHandler(tokenProvider, upstreamURL))
 	
 	// All other paths go to the proxy
 	mux.Handle("/v1/", proxyHandler)

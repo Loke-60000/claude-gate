@@ -102,6 +102,32 @@ func ConvertOpenAIToAnthropic(body []byte) ([]byte, error) {
 		}
 	}
 	
+	// Set default max_tokens if not provided (Claude requires this field)
+	if _, hasMaxTokens := anthropicRequest["max_tokens"]; !hasMaxTokens {
+		// Set model-appropriate defaults based on actual Claude model capabilities
+		model, _ := anthropicRequest["model"].(string)
+		switch {
+		case strings.Contains(model, "claude-opus-4-20250514"):
+			anthropicRequest["max_tokens"] = 16000 // Claude Opus 4: 32K max, use 16K default for good responses
+		case strings.Contains(model, "claude-sonnet-4-20250514"):
+			anthropicRequest["max_tokens"] = 32000 // Claude Sonnet 4: 64K max, use 32K default for comprehensive responses
+		case strings.Contains(model, "claude-3-7-sonnet-20250219"):
+			anthropicRequest["max_tokens"] = 32000 // Claude 3.7 Sonnet: 64K max, use 32K default for comprehensive responses
+		case strings.Contains(model, "claude-3-5-sonnet"):
+			anthropicRequest["max_tokens"] = 8192 // Claude 3.5 Sonnet: 8K max, use full capacity
+		case strings.Contains(model, "claude-3-5-haiku"):
+			anthropicRequest["max_tokens"] = 8192 // Claude 3.5 Haiku: 8K max, use full capacity
+		case strings.Contains(model, "claude-3-opus"):
+			anthropicRequest["max_tokens"] = 4096 // Claude 3 Opus: 4K max, use full capacity
+		case strings.Contains(model, "claude-3-sonnet"):
+			anthropicRequest["max_tokens"] = 4096 // Claude 3 Sonnet: 4K max, use full capacity
+		case strings.Contains(model, "claude-3-haiku"):
+			anthropicRequest["max_tokens"] = 4096 // Claude 3 Haiku: 4K max, use full capacity
+		default:
+			anthropicRequest["max_tokens"] = 4096 // Conservative default
+		}
+	}
+	
 	return json.Marshal(anthropicRequest)
 }
 

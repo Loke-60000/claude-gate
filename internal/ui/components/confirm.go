@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ml0-1337/claude-gate/internal/ui/styles"
+	"github.com/ml0-1337/claude-gate/internal/ui/utils"
 )
 
 // ConfirmModel represents a confirmation prompt
@@ -64,6 +65,11 @@ func (m ConfirmModel) View() string {
 
 // Confirm shows a confirmation prompt and returns the answer
 func Confirm(question string) bool {
+	// Check if we have a TTY available
+	if !utils.IsInteractive() {
+		return confirmNonInteractive(question, false)
+	}
+
 	model := NewConfirm(question)
 	p := tea.NewProgram(model)
 	
@@ -77,6 +83,11 @@ func Confirm(question string) bool {
 
 // ConfirmWithDefault shows a confirmation prompt with a default value
 func ConfirmWithDefault(question string, defaultYes bool) bool {
+	// Check if we have a TTY available
+	if !utils.IsInteractive() {
+		return confirmNonInteractive(question, defaultYes)
+	}
+
 	suffix := "(y/N)"
 	if defaultYes {
 		suffix = "(Y/n)"
@@ -101,6 +112,32 @@ func ConfirmWithDefault(question string, defaultYes bool) bool {
 	}
 	
 	return finalModel.(*ConfirmDefaultModel).answer
+}
+
+// confirmNonInteractive handles confirmation without TTY
+func confirmNonInteractive(question string, defaultYes bool) bool {
+	suffix := "(y/N)"
+	if defaultYes {
+		suffix = "(Y/n)"
+	}
+	
+	fmt.Printf("%s %s ", question, suffix)
+	
+	var response string
+	if _, err := fmt.Scanln(&response); err != nil {
+		// On error or empty input, return the default
+		return defaultYes
+	}
+	
+	switch response {
+	case "y", "Y", "yes", "Yes", "YES":
+		return true
+	case "n", "N", "no", "No", "NO":
+		return false
+	default:
+		// Empty response or anything else, return default
+		return defaultYes
+	}
 }
 
 // ConfirmDefaultModel extends ConfirmModel with default value support

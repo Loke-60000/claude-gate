@@ -90,23 +90,21 @@ func getPlatformBackends() []keyring.BackendType {
 	case "darwin":
 		return []keyring.BackendType{
 			keyring.KeychainBackend,
-			keyring.FileBackend,
 		}
 	case "linux":
 		return []keyring.BackendType{
 			keyring.SecretServiceBackend,
 			keyring.KWalletBackend,
-			keyring.FileBackend,
 		}
 	case "windows":
 		return []keyring.BackendType{
 			keyring.WinCredBackend,
-			keyring.FileBackend,
 		}
 	default:
-		return []keyring.BackendType{
-			keyring.FileBackend,
-		}
+		// For unsupported platforms, return an empty slice.
+		// This will cause keyring.Open to fail, and the storage factory will correctly
+		// fall back to our own simple FileStorage implementation.
+		return []keyring.BackendType{}
 	}
 }
 

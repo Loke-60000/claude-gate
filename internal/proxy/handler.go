@@ -177,11 +177,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 	
 	// Check if this is a streaming response
-	isStreaming := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") ||
-		strings.Contains(r.URL.RawQuery, "stream=true")
+	// Only treat as streaming if the response is successful (2xx status)
+	isStreaming := resp.StatusCode >= 200 && resp.StatusCode < 300 && (
+		strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") ||
+		strings.Contains(r.URL.RawQuery, "stream=true"))
 	
 	// Also check the request body for stream parameter
-	if !isStreaming && len(body) > 0 {
+	if !isStreaming && len(body) > 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		var reqData map[string]interface{}
 		if err := json.Unmarshal(body, &reqData); err == nil {
 			if stream, ok := reqData["stream"].(bool); ok && stream {
@@ -462,7 +464,7 @@ type ProxyServer struct {
 func NewProxyServer(config *ProxyConfig, addr string, storage auth.StorageBackend) *ProxyServer {
 	proxyHandler := NewProxyHandler(config)
 	healthHandler := NewHealthHandler(storage)
-	mux := CreateMux(proxyHandler, healthHandler)
+	mux := CreateMux(proxyHandler, healthHandler, config.TokenProvider, config.UpstreamURL)
 	
 	return &ProxyServer{
 		handler: proxyHandler,

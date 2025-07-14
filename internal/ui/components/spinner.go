@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ml0-1337/claude-gate/internal/ui/styles"
+	"github.com/ml0-1337/claude-gate/internal/ui/utils"
 )
 
 // SpinnerModel represents a spinner with a message
@@ -81,6 +82,11 @@ type StatusMsg struct {
 
 // RunSpinner runs a spinner while executing a function
 func RunSpinner(message string, fn func() error) error {
+	// Check if we have a TTY available
+	if !utils.IsInteractive() {
+		return runSpinnerNonInteractive(message, fn)
+	}
+
 	// Create the spinner model
 	model := NewSpinner(message)
 	
@@ -123,8 +129,28 @@ func RunSpinner(message string, fn func() error) error {
 	}
 }
 
+// runSpinnerNonInteractive runs the function without TTY spinner
+func runSpinnerNonInteractive(message string, fn func() error) error {
+	fmt.Printf("%s ", message)
+	err := fn()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return err
+	}
+	fmt.Printf("Done!\n")
+	return nil
+}
+
 // SimpleSpinner shows a spinner for a duration or until interrupted
 func SimpleSpinner(message string, duration time.Duration) {
+	// Check if we have a TTY available
+	if !utils.IsInteractive() {
+		fmt.Printf("%s ", message)
+		time.Sleep(duration)
+		fmt.Printf("Done!\n")
+		return
+	}
+
 	model := NewSpinner(message)
 	p := tea.NewProgram(model)
 	

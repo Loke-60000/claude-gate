@@ -26,7 +26,7 @@ func NewEnhancedProxyServer(config *ProxyConfig, address string, storage auth.St
 	
 	// Create middleware that logs to dashboard
 	middleware := &dashboardMiddleware{
-		handler:   CreateMux(handler, healthHandler),
+		handler:   CreateMux(handler, healthHandler, config.TokenProvider, config.UpstreamURL),
 		dashboard: dashboardModel,
 	}
 	

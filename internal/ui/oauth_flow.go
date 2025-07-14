@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ml0-1337/claude-gate/internal/ui/styles"
+	"github.com/ml0-1337/claude-gate/internal/ui/utils"
 )
 
 // OAuthStep represents a step in the OAuth flow
@@ -229,6 +230,11 @@ type AuthCompleteMsg struct{}
 
 // RunOAuthFlow runs the interactive OAuth flow and returns the authorization code
 func RunOAuthFlow(authURL string) (string, error) {
+	// Check if we have a TTY available
+	if !utils.IsInteractive() {
+		return runNonInteractiveOAuthFlow(authURL)
+	}
+
 	model := NewOAuthFlow()
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
@@ -252,6 +258,22 @@ func RunOAuthFlow(authURL string) (string, error) {
 	case err := <-model.errChan:
 		return "", err
 	}
+}
+
+// runNonInteractiveOAuthFlow handles OAuth flow without TTY
+func runNonInteractiveOAuthFlow(authURL string) (string, error) {
+	fmt.Printf("\n🔐 Claude Pro/Max OAuth Authentication\n\n")
+	fmt.Printf("Please open this URL in your browser to authenticate:\n\n")
+	fmt.Printf("%s\n\n", authURL)
+	fmt.Printf("After authorization, you'll receive a code.\n")
+	fmt.Printf("Enter the authorization code: ")
+
+	var code string
+	if _, err := fmt.Scanln(&code); err != nil {
+		return "", fmt.Errorf("failed to read authorization code: %w", err)
+	}
+
+	return strings.TrimSpace(code), nil
 }
 
 // Helper to update progress from outside

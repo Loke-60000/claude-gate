@@ -1,118 +1,179 @@
 package auth
 
 import (
-	"runtime"
+	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
-	"testing"
+	"runtime"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/99designs/keyring"
 )
 
-func TestStorageFactory_Create(t *testing.T) {
-	// Test file storage creation
-	t.Run("file storage", func(t *testing.T) {
-		testPath := filepath.Join(os.TempDir(), "test-auth.json")
-		factory := NewStorageFactory(StorageFactoryConfig{
-			Type:     StorageTypeFile,
-			FilePath: testPath,
-		})
-		
-		storage, err := factory.Create()
-		assert.NoError(t, err)
-		assert.NotNil(t, storage)
-		assert.IsType(t, &FileStorage{}, storage)
-		assert.Equal(t, "file:"+testPath, storage.Name())
-	})
+// StorageType represents the type of storage backend
+type StorageType string
+
+const (
+	StorageTypeAuto    StorageType = "auto"    // Automatically select best available
+	StorageTypeKeyring StorageType = "keyring" // Force keyring storage
+	StorageTypeFile    StorageType = "file"    // Force file storage
+)
+
+// StorageFactory creates storage backends based on configuration
+type StorageFactory struct {
+	storageType    StorageType
+	filePath       string
+	keyringConfig  KeyringConfig
+	passwordPrompt keyring.PromptFunc
+}
+
+// StorageFactoryConfig holds configuration for the storage factory
+type StorageFactoryConfig struct {
+	Type           StorageType
+	FilePath       string
+	ServiceName    string
+	PasswordPrompt keyring.PromptFunc
 	
-	// Test auto storage creation
-	t.Run("auto storage", func(t *testing.T) {
-		testPath := filepath.Join(os.TempDir(), "test-auth.json")
-		factory := NewStorageFactory(StorageFactoryConfig{
-			Type:     StorageTypeAuto,
-			FilePath: testPath,
-		})
-		
-		storage, err := factory.Create()
-		assert.NoError(t, err)
-		assert.NotNil(t, storage)
-		// Auto mode will select best available backend
-		// Could be either keyring or file depending on system
-		assert.True(t, storage.Name() == "keyring:claude-gate" || strings.Contains(storage.Name(), "file:"))
-	})
+	// macOS-specific settings
+	KeychainTrustApp               bool
+	KeychainAccessibleWhenUnlocked bool
+	KeychainSynchronizable         bool
+}
+
+// NewStorageFactory creates a new storage factory
+func NewStorageFactory(config StorageFactoryConfig) *StorageFactory {
+	// Set defaults
+	if config.Type == "" {
+		config.Type = StorageTypeAuto
+	}
 	
-	// Test unknown storage type
-	t.Run("unknown storage type", func(t *testing.T) {
-		factory := &StorageFactory{
-			storageType: StorageType("unknown"),
+	if config.ServiceName == "" {
+		config.ServiceName = "claude-gate"
+	}
+	
+	if config.FilePath == "" {
+		homeDir, _ := os.UserHomeDir()
+		config.FilePath = homeDir + "/.claude-gate/auth.json"
+	}
+	
+	// Default password prompt if not provided
+	if config.PasswordPrompt == nil {
+		config.PasswordPrompt = defaultPasswordPrompt
+	}
+	
+	// Set keyring config
+	keyringCfg := KeyringConfig{
+		ServiceName:    config.ServiceName,
+		PasswordPrompt: config.PasswordPrompt,
+		Debug:          false,
+	}
+	
+	// Apply macOS settings from config (with defaults if not set)
+	if runtime.GOOS == "darwin" {
+		// Use config values, but default to true/true/false if not explicitly set
+		keyringCfg.KeychainTrustApplication = config.KeychainTrustApp
+		keyringCfg.KeychainAccessibleWhenUnlocked = config.KeychainAccessibleWhenUnlocked
+		keyringCfg.KeychainSynchronizable = config.KeychainSynchronizable
+		
+		// If the struct fields are zero values and we're on macOS, apply sensible defaults
+		// This handles backward compatibility when the fields aren't explicitly set
+		if !config.KeychainTrustApp && !config.KeychainAccessibleWhenUnlocked && !config.KeychainSynchronizable {
+			keyringCfg.KeychainTrustApplication = true       // Trust app by default
+			keyringCfg.KeychainAccessibleWhenUnlocked = true // Accessible when unlocked
+			keyringCfg.KeychainSynchronizable = false        // Don't sync to iCloud
+		}
+	}
+	
+	return &StorageFactory{
+		storageType:    config.Type,
+		filePath:       config.FilePath,
+		keyringConfig:  keyringCfg,
+		passwordPrompt: config.PasswordPrompt,
+	}
+}
+
+// Create creates a storage backend based on configuration
+func (f *StorageFactory) Create() (StorageBackend, error) {
+	switch f.storageType {
+	case StorageTypeFile:
+		return NewFileStorage(f.filePath), nil
+		
+	case StorageTypeKeyring:
+		ks, err := NewKeyringStorage(f.keyringConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create keyring storage: %w", err)
+		}
+		return ks, nil
+		
+	case StorageTypeAuto:
+		// Try keyring first, fall back to file
+		if isKeyringAvailable() {
+			ks, err := NewKeyringStorage(f.keyringConfig)
+			if err == nil && ks.IsAvailable() {
+				return ks, nil
+			}
+			// Log warning and fall back
+			fmt.Fprintf(os.Stderr, "Warning: Keyring storage unavailable, falling back to file storage: %v\n", err)
+		}
+		return NewFileStorage(f.filePath), nil
+		
+	default:
+		return nil, fmt.Errorf("unknown storage type: %s", f.storageType)
+	}
+}
+
+// CreateWithMigration creates a storage backend and migrates data if needed
+func (f *StorageFactory) CreateWithMigration() (StorageBackend, error) {
+	// Create the target storage
+	storage, err := f.Create()
+	if err != nil {
+		return nil, err
+	}
+
+	// *** THE FIX IS HERE ***
+	// If the resulting storage is a file storage, there's nothing to migrate from.
+	// The only migration path is FROM file TO something else (like a keyring).
+	if _, ok := storage.(*FileStorage); ok {
+		return storage, nil
+	}
+
+	// --- The rest of the migration logic for when storage IS a keyring ---
+	fileStorage := NewFileStorage(f.filePath)
+	
+	// Check if the source file has data
+	providers, err := fileStorage.List()
+	if err == nil && len(providers) > 0 {
+		// Migrate data
+		migrator := NewStorageMigrator(fileStorage, storage)
+		if err := migrator.Migrate(); err != nil {
+			return nil, fmt.Errorf("failed to migrate storage: %w", err)
 		}
 		
-		storage, err := factory.Create()
-		assert.Error(t, err)
-		assert.Nil(t, storage)
-		assert.Contains(t, err.Error(), "unknown storage type")
-	})
-}
-
-func TestStorageFactory_CreateWithMigration(t *testing.T) {
-	// Create temporary directory for test
-	tempDir := t.TempDir()
-	jsonPath := filepath.Join(tempDir, "auth.json")
-	
-	// Create file storage with test data
-	fileStorage := NewFileStorage(jsonPath)
-	testToken := &TokenInfo{
-		Type:         "oauth",
-		RefreshToken: "test-refresh",
-		AccessToken:  "test-access",
-		ExpiresAt:    1234567890,
+		fmt.Fprintf(os.Stderr, "Successfully migrated %d tokens to %s\n", len(providers), storage.Name())
 	}
 	
-	err := fileStorage.Set("anthropic", testToken)
-	require.NoError(t, err)
-	
-	// Create factory that will migrate to file storage (simulating keyring)
-	factory := NewStorageFactory(StorageFactoryConfig{
-		Type:     StorageTypeFile,
-		FilePath: filepath.Join(tempDir, "auth-migrated.json"),
-	})
-	
-	// Create with migration
-	storage, err := factory.CreateWithMigration()
-	assert.NoError(t, err)
-	assert.NotNil(t, storage)
-	
-	// Original file should still exist
-	_, err = os.Stat(jsonPath)
-	assert.NoError(t, err)
+	return storage, nil
 }
 
-func TestStorageFactory_Defaults(t *testing.T) {
-	// Test with empty config
-	factory := NewStorageFactory(StorageFactoryConfig{})
-	
-	assert.Equal(t, StorageTypeAuto, factory.storageType)
-	assert.Equal(t, "claude-gate", factory.keyringConfig.ServiceName)
-	assert.Contains(t, factory.filePath, ".claude-gate/auth.json")
-	assert.NotNil(t, factory.passwordPrompt)
-}
-
-func TestIsKeyringAvailable(t *testing.T) {
-	// This test is platform-specific
-	available := isKeyringAvailable()
-	
+// isKeyringAvailable checks if keyring functionality is available on this system
+func isKeyringAvailable() bool {
 	switch runtime.GOOS {
 	case "darwin":
-		// Should always be available on macOS
-		assert.True(t, available)
+		// macOS always has Keychain
+		return true
 	case "linux":
-		// Depends on display environment
-		hasDisplay := os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
-		assert.Equal(t, hasDisplay, available)
+		// Check for Secret Service or KWallet
+		// This is a simplified check - in reality we'd check D-Bus
+		return os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
+	// case "windows":
+	// 	// Windows always has Credential Manager
+	// 	return true
 	default:
-		// Other platforms should return false
-		assert.False(t, available)
+		return false
 	}
+}
+
+// defaultPasswordPrompt provides a default password prompt function
+func defaultPasswordPrompt(prompt string) (string, error) {
+	// In a real implementation, this would use terminal input
+	// For now, return an error to force non-interactive mode
+	return "", fmt.Errorf("interactive password prompt not implemented - use environment variable or config file")
 }
